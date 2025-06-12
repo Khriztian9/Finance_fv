@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Simulador Financiero FV</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Simulador Financiero de Proyectos Fotovoltaicos</h1>
+
+        <form id="formulario">
+            <div class="input-group"><label>Generación Anual (kWh)</label><input type="number" name="generacion_anual_kwh" value="150000" required></div>
+            <div class="input-group"><label>% Autoconsumo (0 a 1)</label><input type="number" step="0.01" name="porcentaje_autoconsumo" value="0.4" required></div>
+            <div class="input-group"><label>Consumo Anual Usuario (kWh)</label><input type="number" name="consumo_anual_usuario" value="150000" required></div>
+            <div class="input-group"><label>Precio Energía Comprada (COP/kWh)</label><input type="number" name="precio_compra_kwh" value="577" required></div>
+            <div class="input-group"><label>Crecimiento Energía (%)</label><input type="number" step="0.01" name="crecimiento_energia" value="0.08" required></div>
+            <div class="input-group"><label>Precio Bolsa Energía (COP/kWh)</label><input type="number" name="precio_bolsa" value="400" required></div>
+            <div class="input-group"><label>Crecimiento Bolsa (%)</label><input type="number" step="0.01" name="crecimiento_bolsa" value="0.08" required></div>
+            <div class="input-group"><label>Componente Comercialización (COP/kWh)</label><input type="number" name="componente_comercializacion" value="60" required></div>
+            <div class="input-group"><label>CAPEX (COP)</label><input type="number" name="capex" value="320000000" required></div>
+            <div class="input-group"><label>OPEX Anual (COP)</label><input type="number" name="opex_anual" value="2000000" required></div>
+            <div class="input-group"><label>Horizonte (años)</label><input type="number" name="horizonte_anios" value="20" required></div>
+            <div class="input-group"><label>Tasa de Descuento (%)</label><input type="number" step="0.01" name="tasa_descuento" value="0.10" required></div>
+
+            <button type="submit">Calcular Flujo</button>
+        </form>
+
+        <div id="resultados"></div>
+        <canvas id="graficoFlujos" width="600" height="300"></canvas>
+    </div>
+
+    <script>
+        const formulario = document.getElementById("formulario");
+        const resultadosDiv = document.getElementById("resultados");
+
+        formulario.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const formData = new FormData(formulario);
+            const data = Object.fromEntries(formData.entries());
+
+            for (const key in data) {
+                data[key] = parseFloat(data[key]);
+            }
+
+            const res = await fetch("http://127.0.0.1:8000/calcular", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(data)
+            });
+
+            const resultado = await res.json();
+
+            resultadosDiv.innerHTML = `
+                <h2>Resultado Financiero</h2>
+                <p><strong>VPN:</strong> ${resultado.vpn.toLocaleString()} COP</p>
+                <p><strong>TIR:</strong> ${resultado.tir}%</p>
+                <p><strong>Ingreso total año 1:</strong> ${resultado.ingreso_total.toLocaleString()} COP</p>
+                <p><strong>Autoconsumo:</strong> ${resultado.autoconsumo_kwh.toLocaleString()} kWh</p>
+                <p><strong>Excedente 1:</strong> ${resultado.excedente1_kwh.toLocaleString()} kWh</p>
+                <p><strong>Excedente 2:</strong> ${resultado.excedente2_kwh.toLocaleString()} kWh</p>
+            `;
+
+            // Calcular año de retorno (payback simple)
+            let acumulado = 0;
+            let anoPayback = null;
+            for (let i = 0; i < resultado.flujos.length; i++) {
+                acumulado += resultado.flujos[i];
+                if (acumulado >= 0 && anoPayback === null) {
+                    anoPayback = i;
+                }
+            }
+
+            // Gráfico
+            const ctx = document.getElementById("graficoFlujos").getContext("2d");
+            const labels = resultado.flujos.map((_, i) => `Año ${i}`);
+
+            const dataFlujos = {
+                labels: labels,
+                datasets: [{
+                    label: "Flujo de Caja (COP)",
+                    data: resultado.flujos,
+                    borderWidth: 2,
+                    borderColor: "blue",
+                    backgroundColor: "rgba(0, 123, 255, 0.2)",
+                    fill: true,
+                    tension: 0.1
+                }]
+            };
+
+            const pluginPayback = {
+                id: "paybackLine",
+                afterDatasetsDraw(chart) {
+                    if (anoPayback === null || anoPayback >= chart.data.labels.length) return;
+
+                    const ctx = chart.ctx;
+                    const xAxis = chart.scales.x;
+                    const yAxis = chart.scales.y;
+                    const x = xAxis.getPixelForValue(`Año ${anoPayback}`);
+
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(x, yAxis.top);
+                    ctx.lineTo(x, yAxis.bottom);
+                    ctx.strokeStyle = "red";
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.fillStyle = "red";
+                    ctx.fillText("Payback", x + 5, yAxis.top + 20);
+                    ctx.restore();
+                }
+            };
+
+            if (window.graficoCaja) {
+                window.graficoCaja.destroy();
+            }
+
+            window.graficoCaja = new Chart(ctx, {
+                type: 'line',
+                data: dataFlujos,
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: { position: 'top' },
+                        title: {
+                            display: true,
+                            text: 'Flujo de Caja Anual del Proyecto'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: 'COP'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Año'
+                            }
+                        }
+                    }
+                },
+                plugins: [pluginPayback]
+            });
+        });
+    </script>
+</body>
+</html>
